@@ -8,6 +8,7 @@ aux_source_directory(common COMMON_SRC)
 aux_source_directory(. APRILTAG_SRCS)
 
 set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_INSTALL_LIBDIR "lib") # lib prefix workaround for multi-arch
 
 # Library
 add_library(${PROJECT_NAME} SHARED ${APRILTAG_SRCS} ${COMMON_SRC})
