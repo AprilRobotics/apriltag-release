@@ -1,4 +1,4 @@
-From ebb2f34775efeda893ea3aa1264ee0628464a5a4 Mon Sep 17 00:00:00 2001
+From 864b8c8c810d62ea921ceb6994e11bb1ceb0d46c Mon Sep 17 00:00:00 2001
 From: Wolfgang Merkt <w.merkt@gmail.com>
 Date: Fri, 18 Sep 2020 11:54:10 +0100
 Subject: [PATCH] Set libdir to lib
@@ -8,17 +8,17 @@ Subject: [PATCH] Set libdir to lib
  1 file changed, 1 insertion(+)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index b97f24e..2fae715 100644
+index c733c6c..8eafbfa 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -8,6 +8,7 @@ aux_source_directory(common COMMON_SRC)
- aux_source_directory(. APRILTAG_SRCS)
+ set(APRILTAG_SRCS apriltag.c apriltag_pose.c apriltag_quad_thresh.c)
  
  set(CMAKE_BUILD_TYPE Release)
 +set(CMAKE_INSTALL_LIBDIR "lib") # lib prefix workaround for multi-arch
  
  # Library
- add_library(${PROJECT_NAME} SHARED ${APRILTAG_SRCS} ${COMMON_SRC})
+ file(GLOB TAG_FILES ${CMAKE_SOURCE_DIR}/tag*.c)
 -- 
 2.17.1
 
