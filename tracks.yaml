@@ -74,7 +74,7 @@ tracks:
     vcs_type: git
     vcs_uri: https://github.com/AprilRobotics/apriltag.git
     version: :{auto}
-  master:
+  melodic:
     actions:
     - bloom-export-upstream :{vcs_local_uri} :{vcs_type} --tag :{release_tag} --display-uri
       :{vcs_uri} --name :{name} --output-dir :{archive_dir_path}
