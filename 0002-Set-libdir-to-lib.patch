@@ -1,7 +1,7 @@
 From 864b8c8c810d62ea921ceb6994e11bb1ceb0d46c Mon Sep 17 00:00:00 2001
 From: Wolfgang Merkt <w.merkt@gmail.com>
 Date: Fri, 18 Sep 2020 11:54:10 +0100
-Subject: [PATCH] Set libdir to lib
+Subject: [PATCH 2/3] Set libdir to lib
 
 ---
  CMakeLists.txt | 1 +
@@ -20,5 +20,5 @@ index c733c6c..8eafbfa 100644
  # Library
  file(GLOB TAG_FILES ${CMAKE_SOURCE_DIR}/tag*.c)
 -- 
-2.17.1
+2.25.1
 

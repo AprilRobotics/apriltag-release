@@ -1,0 +1,1383 @@
+From 07eda2a9068a6382bd908a15d09bfd6790d2d4f9 Mon Sep 17 00:00:00 2001
+From: Wolfgang Merkt <w.merkt@gmail.com>
+Date: Fri, 18 Sep 2020 12:28:32 +0100
+Subject: [PATCH 1/3] Rebase from 'upstream'
+
+---
+ .travis.yml                |   2 -
+ CMakeLists.txt             |  46 ++++-
+ README.md                  | 120 +++---------
+ apriltag.c                 |  38 ++--
+ apriltag_detect.docstring  |  60 ++++++
+ apriltag_pose.c            |  18 +-
+ apriltag_py_type.docstring |  80 ++++++++
+ apriltag_pywrap.c          | 365 +++++++++++++++++++++++++++++++++++++
+ apriltag_quad_thresh.c     |  17 +-
+ common/matd.c              |   4 +-
+ common/pjpeg.c             |   8 +-
+ common/string_util.c       |   8 +-
+ common/zarray.h            |  20 --
+ common/zhash.c             |   8 +-
+ package.xml                |   2 +-
+ python_build_flags.py      |  34 ++++
+ tag16h5.c                  |   2 +-
+ tag16h5.h                  |   2 +
+ tag25h9.c                  |   2 +-
+ tag25h9.h                  |   2 +
+ tag36h11.c                 |   2 +-
+ tag36h11.h                 |   2 +
+ tagCircle21h7.c            |   2 +-
+ tagCircle21h7.h            |   2 +
+ tagCircle49h12.c           |   2 +-
+ tagCircle49h12.h           |   2 +
+ tagCustom48h12.c           |   2 +-
+ tagCustom48h12.h           |   2 +
+ tagStandard41h12.c         |   2 +-
+ tagStandard41h12.h         |   2 +
+ tagStandard52h13.c         |   2 +-
+ tagStandard52h13.h         |   2 +
+ 32 files changed, 689 insertions(+), 173 deletions(-)
+ create mode 100644 apriltag_detect.docstring
+ create mode 100644 apriltag_py_type.docstring
+ create mode 100644 apriltag_pywrap.c
+ create mode 100644 python_build_flags.py
+
+diff --git a/.travis.yml b/.travis.yml
+index 3a8446e..9341513 100644
+--- a/.travis.yml
++++ b/.travis.yml
+@@ -5,9 +5,7 @@ language: generic
+ env:
+   matrix:
+     - ROS_DISTRO="kinetic"
+-    - ROS_DISTRO="kinetic" PRERELEASE=true NOT_TEST_INSTALL=true NOT_TEST_BUILD=true
+     - ROS_DISTRO="melodic"
+-    - ROS_DISTRO="melodic" PRERELEASE=true NOT_TEST_INSTALL=true NOT_TEST_BUILD=true
+ install:
+   - git clone --quiet --depth 1 https://github.com/ros-industrial/industrial_ci.git .ci_config
+ script:
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2fae715..c733c6c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,13 +5,14 @@ find_package(OpenCV QUIET)
+ 
+ include_directories(.)
+ aux_source_directory(common COMMON_SRC)
+-aux_source_directory(. APRILTAG_SRCS)
++set(APRILTAG_SRCS apriltag.c apriltag_pose.c apriltag_quad_thresh.c)
+ 
+ set(CMAKE_BUILD_TYPE Release)
+-set(CMAKE_INSTALL_LIBDIR "lib") # lib prefix workaround for multi-arch
+ 
+ # Library
+-add_library(${PROJECT_NAME} SHARED ${APRILTAG_SRCS} ${COMMON_SRC})
++file(GLOB TAG_FILES ${CMAKE_SOURCE_DIR}/tag*.c)
++set_source_files_properties(SOURCE ${TAG_FILES} PROPERTIES COMPILE_FLAGS -O0)
++add_library(${PROJECT_NAME} SHARED ${APRILTAG_SRCS} ${COMMON_SRC} ${TAG_FILES})
+ if (MSVC)
+     # FindThreads will not find pthread.h with MSVC
+     # winmm is necessary for __imp_timeGetTime
+@@ -35,8 +36,6 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
+     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_INSTALL_LIBDIR}
+ )
+ 
+-file(GLOB TAG_FILES ${CMAKE_SOURCE_DIR}/tag*.c)
+-set_source_files_properties(SOURCE ${TAG_FILES} PROPERTIES COMPILE_FLAGS -O0)
+ 
+ # install library
+ install(TARGETS ${PROJECT_NAME} EXPORT apriltag
+@@ -62,6 +61,42 @@ STRING(REGEX REPLACE "^prefix=" "prefix=${CMAKE_INSTALL_PREFIX}" PKGC_CONF "${PK
+ FILE(WRITE ${PROJECT_BINARY_DIR}/apriltag.pc ${PKGC_CONF})
+ install(FILES "${PROJECT_BINARY_DIR}/apriltag.pc" DESTINATION "lib/pkgconfig/")
+ 
++
++# Python wrapper
++SET(Python_ADDITIONAL_VERSIONS 3)
++find_package(PythonLibs)
++execute_process(COMMAND which python3 OUTPUT_QUIET RESULT_VARIABLE Python3_NOT_FOUND)
++execute_process(COMMAND python3 -c "import numpy" RESULT_VARIABLE Numpy_NOT_FOUND)
++if (NOT Python3_NOT_FOUND AND NOT Numpy_NOT_FOUND AND PYTHONLIBS_FOUND)
++# TODO deal with both python2/3
++execute_process(COMMAND python3 ${CMAKE_SOURCE_DIR}/python_build_flags.py OUTPUT_VARIABLE PY_OUT)
++set(PY_VARS CFLAGS LDFLAGS LINKER EXT_SUFFIX)
++cmake_parse_arguments(PY "" "${PY_VARS}" "" ${PY_OUT})
++separate_arguments(PY_CFLAGS)
++separate_arguments(PY_LDFLAGS)
++set(LIB_APRILTAG_PATH ${PROJECT_BINARY_DIR}/lib)
++
++foreach(X detect py_type)
++add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/apriltag_${X}.docstring.h
++    COMMAND < ${CMAKE_SOURCE_DIR}/apriltag_${X}.docstring sed 's/\"/\\\\\"/g\; s/^/\"/\; s/$$/\\\\n\"/\;' > apriltag_${X}.docstring.h
++    WORKING_DIRECTORY ${PROJECT_BINARY_DIR})
++endforeach()
++
++add_custom_command(OUTPUT apriltag_pywrap.o
++    COMMAND ${CMAKE_C_COMPILER} ${CMAKE_C_FLAGS} ${PY_CFLAGS} -I${PROJECT_BINARY_DIR} -c -o apriltag_pywrap.o ${CMAKE_SOURCE_DIR}/apriltag_pywrap.c
++    DEPENDS ${CMAKE_SOURCE_DIR}/apriltag_pywrap.c ${PROJECT_BINARY_DIR}/apriltag_detect.docstring.h ${PROJECT_BINARY_DIR}/apriltag_py_type.docstring.h)
++add_custom_command(OUTPUT apriltag${PY_EXT_SUFFIX}
++    COMMAND ${PY_LINKER} ${PY_LDFLAGS} -Wl,-rpath=lib apriltag_pywrap.o ${LIB_APRILTAG_PATH}/libapriltag.so -o apriltag${PY_EXT_SUFFIX}
++    DEPENDS ${PROJECT_NAME} apriltag_pywrap.o)
++add_custom_target(apriltag_python ALL
++    DEPENDS apriltag${PY_EXT_SUFFIX})
++
++execute_process(COMMAND python3 -m site --user-site OUTPUT_VARIABLE PY_DEST)
++string(STRIP ${PY_DEST} PY_DEST)
++install(CODE "execute_process(COMMAND cp ${PROJECT_BINARY_DIR}/apriltag${PY_EXT_SUFFIX} ${PY_DEST})")
++endif (NOT Python3_NOT_FOUND AND NOT Numpy_NOT_FOUND AND PYTHONLIBS_FOUND)
++
++
+ # Examples
+ # apriltag_demo
+ add_executable(apriltag_demo example/apriltag_demo.c)
+@@ -71,6 +106,7 @@ target_link_libraries(apriltag_demo apriltag)
+ if(OpenCV_FOUND)
+     add_executable(opencv_demo example/opencv_demo.cc)
+     target_link_libraries(opencv_demo apriltag ${OpenCV_LIBRARIES})
++    set_target_properties(opencv_demo PROPERTIES CXX_STANDARD 11)
+     install(TARGETS opencv_demo RUNTIME DESTINATION bin)
+ endif(OpenCV_FOUND)
+ 
+diff --git a/README.md b/README.md
+index e92f39c..c2e9e44 100644
+--- a/README.md
++++ b/README.md
+@@ -1,17 +1,35 @@
+ AprilTag 3
+ ==========
+-AprilTag is a visual fiducial system popular in robotics research. This repository contains the most recent version of AprilTag, AprilTag 3, which includes a faster (>2x) detector, improved detection rate on small tags, flexible tag layouts, and pose estimation. AprilTag consists of a small C library with minimal dependencies. Officially only linux operating systems are supported.
++AprilTag is a visual fiducial system popular in robotics research. This repository contains the most recent version of AprilTag, AprilTag 3, which includes a faster (>2x) detector, improved detection rate on small tags, flexible tag layouts, and pose estimation. AprilTag consists of a small C library with minimal dependencies.
+ 
+ You can find tag images for the pre-generated layouts [here](https://github.com/AprilRobotics/apriltag-imgs). We recommend using the tagStandard41h12 layout.
+ 
+-[![Build Status](https://travis-ci.org/AprilRobotics/apriltag.svg?branch=master)](https://travis-ci.org/AprilRobotics/apriltag)
++[![Build Status](https://travis-ci.com/AprilRobotics/apriltag.svg?branch=master)](https://travis-ci.com/AprilRobotics/apriltag)
++
++Papers
++======
++AprilTag is the subject of the following papers.
++
++[AprilTag: A robust and flexible visual fiducial system](https://april.eecs.umich.edu/papers/details.php?name=olson2011tags)
++
++[AprilTag 2: Efficient and robust fiducial detection](https://april.eecs.umich.edu/papers/details.php?name=wang2016iros)
++
++[Flexible Layouts for Fiducial Tags](https://april.eecs.umich.edu/papers/details.php?name=krogius2019iros)
++
++
++
++Usage
++=====
++[User Guide](https://github.com/AprilRobotics/apriltag/wiki/AprilTag-User-Guide)
+ 
+ Install
+ =======
+ 
+-The default installation will place headers in /usr/local/include and
++ Officially only linux operating systems are supported, although users have had success installing on windows too.
++ 
++ The default installation will place headers in /usr/local/include and
+ shared library in /usr/local/lib. It also installs a pkg-config script
+-into /usr/local/lib/pkgconfig. Be aware that there are some larger tag families which may take a long time to build. If you do not want to use these tag families then you can speed up the installation by deleting the files tagCircle49h12.c, tagCircle49h12.h, tagCustom48h12.c, tagCustom48h12.h, tagStandard52h13.c, and tagStandard52h13.h before installing.
++into /usr/local/lib/pkgconfig and will install a python wrapper if python3 is installed. Be aware that there are some larger tag families which may take a long time to build. If you do not want to use these tag families then you can speed up the installation by deleting the files tagCircle49h12.c, tagCircle49h12.h, tagCustom48h12.c, tagCustom48h12.h, tagStandard52h13.c, and tagStandard52h13.h before installing.
+ 
+ If you have CMake installed or it is not difficult to install, then do:
+ 
+@@ -28,66 +46,6 @@ To install to a different directory than /usr/local:
+     $ PREFIX=/some/path sudo make install
+ 
+ 
+-Usage
+-=====
+-
+-We recommend using the tagStandard41h12 family for all new application.
+-
+-A basic AprilTag application can be seen in example/apriltag_demo.c.
+-
+-
+-Initialization: instantiate a detector and at least one tag family.
+-
+-    apriltag_detector_t *td = apriltag_detector_create();
+-    apriltag_family_t *tf = tag36h11_create();
+-    apriltag_detector_add_family(td, tf);
+-
+-Some tag detector parameters can be set at this time.
+-The default parameters are the recommended starting point.
+-
+-    td->quad_decimate = 2.0;
+-    td->quad_sigma = 0.0;
+-    td->refine_edges = 1;
+-    td->decode_sharpening = 0.25;
+-
+-Increase the image decimation if faster processing is required; the
+-trade-off is a slight decrease in detection range. A factor of 1.0
+-means the full-size input image is used.
+-
+-Some Gaussian blur (quad_sigma) may help with noisy input images.
+-
+-
+-Detection: a single one-line call will process an input image
+-and return a list of detections.
+-
+-    zarray_t *detections = apriltag_detector_detect(td, im);
+-
+-    for (int i = 0; i < zarray_size(detections); i++) {
+-        apriltag_detection_t *det;
+-        zarray_get(detections, i, &det);
+-
+-        // Do something with det here
+-    }
+-
+-    apriltag_detections_destroy(detections);
+-
+-zarray is a container class which is included with apriltag.
+-To process through the list of detections, use zarray_get,
+-as illustrated above.
+-
+-The caller is responsible for freeing detections by calling
+-apriltag_detections_destroy().
+-
+-
+-Cleanup: free the detector and tag family when done.
+-
+-    apriltag_detector_destroy(td);
+-    tag36h11_destroy(tf);
+-
+-Support
+-=======
+-Please create an issue on this github for any questions instead of sending a private message. This allows other people with the same question to find your answer.
+-
+ Flexible Layouts
+ ================
+ AprilTag 3 supports a wide variety of possible tag layouts in addition to the classic layout supported in AprilTag 2. The tag's data bits can now go outside of the tag border, and it is also possible to define layouts with "holes" inside of the tag border where there are no data bits. In this repo we have included:
+@@ -98,27 +56,10 @@ AprilTag 3 supports a wide variety of possible tag layouts in addition to the cl
+ 
+ You can generate your own tag families using our other repo, [AprilTag-Generation](https://github.com/AprilRobotics/apriltag-generation).
+ 
+-Pose Estimation
+-===============
+-We have added methods to estimate the 3d pose of the AprilTag given camera parameters and the size of the tag. Sample code is as follows:
+-
+-    // First create an apriltag_detection_info_t struct using your known parameters.
+-    apriltag_detection_info_t info;
+-    info.det = det;
+-    info.tagsize = tagsize;
+-    info.fx = fx;
+-    info.fy = fy;
+-    info.cx = cx;
+-    info.cy = cy;
+-
+-    // Then call estimate_tag_pose.
+-    apriltag_pose_t pose;
+-    double err = estimate_tag_pose(&info, &pose);
+-    
+-    // Do something with pose.
+-    ...
+-    
+-You can also call <code>estimate_tag_pose_orthogonal_iteration</code> which allows the user to specify the number of iterations used and also returns both possible solutions for the tag pose along with their errors.
++
++Support
++=======
++Please create an issue on this github for any questions instead of sending a private message. This allows other people with the same question to find your answer.
+ 
+ 
+ Upgrading from AprilTag 2
+@@ -129,8 +70,6 @@ For most use-cases this should be a drop in replacement.
+ * If you have generated your own families, you will need to regenerate the c code for those families. The java code however does not need to be regenerated so this should be quick and easy.
+ 
+ 
+-
+-
+ OpenCV Integration
+ ==================
+ 
+@@ -153,11 +92,4 @@ a deep copy. Simply create an image_u8_t header for the cv::Mat data buffer:
+         .stride = img.cols,
+         .buf = img.data
+     };
+-    
+-Wrappers
+-========
+-Third-party wrappers of the apriltag code for other languages.
+- 
+-[Python](https://github.com/duckietown/apriltags3-py)
+ 
+-[Matlab](https://github.com/alddiaz/MATLAB_AprilTag3)
+diff --git a/apriltag.c b/apriltag.c
+index ae96cf9..e512cbd 100644
+--- a/apriltag.c
++++ b/apriltag.c
+@@ -648,8 +648,15 @@ float quad_decode(apriltag_detector_t* td, apriltag_family_t *family, image_u8_t
+         }
+     }
+ 
+-    graymodel_solve(&whitemodel);
+-    graymodel_solve(&blackmodel);
++    if (family->width_at_border > 1) {
++        graymodel_solve(&whitemodel);
++        graymodel_solve(&blackmodel);
++    } else {
++        graymodel_solve(&whitemodel);
++        blackmodel.C[0] = 0;
++        blackmodel.C[1] = 0;
++        blackmodel.C[2] = blackmodel.B[2]/4;
++    }
+ 
+     // XXX Tunable
+     if ((graymodel_interpolate(&whitemodel, 0, 0) - graymodel_interpolate(&blackmodel, 0, 0) < 0) != family->reversed_border) {
+@@ -1066,13 +1073,13 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
+             struct quad *q;
+             zarray_get_volatile(quads, i, &q);
+ 
+-            for (int i = 0; i < 4; i++) {
++            for (int j = 0; j < 4; j++) {
+                 if (td->quad_decimate == 1.5) {
+-                    q->p[i][0] *= td->quad_decimate;
+-                    q->p[i][1] *= td->quad_decimate;
++                    q->p[j][0] *= td->quad_decimate;
++                    q->p[j][1] *= td->quad_decimate;
+                 } else {
+-                    q->p[i][0] = (q->p[i][0] - 0.5)*td->quad_decimate + 0.5;
+-                    q->p[i][1] = (q->p[i][1] - 0.5)*td->quad_decimate + 0.5;
++                    q->p[j][0] = (q->p[j][0] - 0.5)*td->quad_decimate + 0.5;
++                    q->p[j][1] = (q->p[j][1] - 0.5)*td->quad_decimate + 0.5;
+                 }
+             }
+         }
+@@ -1271,8 +1278,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
+             float rgb[3];
+             int bias = 100;
+ 
+-            for (int i = 0; i < 3; i++)
+-                rgb[i] = bias + (random() % (255-bias));
++            for (int j = 0; j < 3; j++) {
++                rgb[j] = bias + (random() % (255-bias));
++            }
+ 
+             fprintf(f, "%f %f %f setrgbcolor\n", rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f);
+             fprintf(f, "%f %f moveto %f %f lineto %f %f lineto %f %f lineto %f %f lineto stroke\n",
+@@ -1310,8 +1318,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
+             float rgb[3];
+             int bias = 100;
+ 
+-            for (int i = 0; i < 3; i++)
+-                rgb[i] = bias + (random() % (255-bias));
++            for (int j = 0; j < 3; j++) {
++                rgb[j] = bias + (random() % (255-bias));
++            }
+ 
+             for (int j = 0; j < 4; j++) {
+                 int k = (j + 1) & 3;
+@@ -1352,8 +1361,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
+             float rgb[3];
+             int bias = 100;
+ 
+-            for (int i = 0; i < 3; i++)
+-                rgb[i] = bias + (random() % (255-bias));
++            for (int j = 0; j < 3; j++) {
++                rgb[j] = bias + (random() % (255-bias));
++            }
+ 
+             fprintf(f, "%f %f %f setrgbcolor\n", rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f);
+             fprintf(f, "%f %f moveto %f %f lineto %f %f lineto %f %f lineto %f %f lineto stroke\n",
+@@ -1409,7 +1419,7 @@ image_u8_t *apriltag_to_image(apriltag_family_t *fam, int idx)
+     image_u8_t *im = image_u8_create(fam->total_width, fam->total_width);
+ 
+     int white_border_width = fam->width_at_border + (fam->reversed_border ? 0 : 2);
+-    int white_border_start = (fam->total_width - fam->width_at_border)/2;
++    int white_border_start = (fam->total_width - white_border_width)/2;
+     // Make 1px white border
+     for (int i = 0; i < white_border_width - 1; i += 1) {
+         im->buf[white_border_start*im->stride + white_border_start + i] = 255;
+diff --git a/apriltag_detect.docstring b/apriltag_detect.docstring
+new file mode 100644
+index 0000000..0f9bca5
+--- /dev/null
++++ b/apriltag_detect.docstring
+@@ -0,0 +1,60 @@
++AprilTag detector
++
++SYNOPSIS
++
++    import cv2
++    import numpy as np
++    from apriltag import apriltag
++
++    imagepath = '/tmp/tst.jpg'
++    image     = cv2.imread(imagepath, cv2.IMREAD_GRAYSCALE)
++    detector = apriltag("tag36h11")
++
++    detections = detector.detect(image)
++
++    print("Saw tags {} at\n{}". \
++          format([d['id']     for d in detections],
++                 np.array([d['center'] for d in detections])))
++
++    ----> Saw tags [3, 5, 7, 8, 10, 10, 14] at
++          [[582.42911184 172.90587335]
++           [703.32149701 271.50587376]
++           [288.1462089  227.01502779]
++           [463.63679264 227.91185418]
++           [ 93.88534443 241.61109765]
++           [121.94062798 237.97010936]
++           [356.46940849 260.20169159]]
++
++DESCRIPTION
++
++The AprilTags visual fiducial system project page is here:
++https://april.eecs.umich.edu/software/apriltag
++
++This is a Python class to provide AprilTags functionality in Python programs. To
++run the detector you
++
++1. Construct an object of type apriltag.apriltag()
++
++2. Invoke the detect() method on this object
++
++The detect() method takes a single argument: an image array. The return value is
++a tuple containing the detections. Each detection is a dict with keys:
++
++- id: integer identifying each detected tag
++
++- center: pixel coordinates of the center of each detection
++
++- lb-rb-rt-lt: pixel coordinates of the 4 corners of each detection. The order
++  is left-bottom, right-bottom, right-top, left-top
++
++- hamming: How many error bits were corrected? Note: accepting large numbers of
++  corrected errors leads to greatly increased false positive rates. NOTE: As of
++  this implementation, the detector cannot detect tags with a hamming distance
++  greater than 2.
++
++- margin: A measure of the quality of the binary decoding process: the average
++  difference between the intensity of a data bit versus the decision threshold.
++  Higher numbers roughly indicate better decodes. This is a reasonable measure
++  of detection accuracy only for very small tags-- not effective for larger tags
++  (where we could have sampled anywhere within a bit cell and still gotten a
++  good detection.)
+diff --git a/apriltag_pose.c b/apriltag_pose.c
+index 4d811cf..da023af 100644
+--- a/apriltag_pose.c
++++ b/apriltag_pose.c
+@@ -110,8 +110,8 @@ double orthogonal_iteration(matd_t** v, matd_t** p, matd_t** t, matd_t** R, int
+         }
+ 
+         double error = 0;
+-        for (int i = 0; i < 4; i++) {
+-            matd_t* err_vec = matd_op("(M-M)(MM+M)", I3, F[i], *R, p[i], *t);
++        for (int j = 0; j < 4; j++) {
++            matd_t* err_vec = matd_op("(M-M)(MM+M)", I3, F[j], *R, p[j], *t);
+             error += matd_to_double(matd_op("M'M", err_vec, err_vec));
+             matd_destroy(err_vec);
+         }
+@@ -409,10 +409,10 @@ matd_t* fix_pose_ambiguities(matd_t** v, matd_t** p, matd_t* t, matd_t* R, int n
+         // Check extrema is a minima.
+         if (a2 - 2*a0 + (3*a3 - 6*a1)*t1 + (6*a4 - 8*a2 + 10*a0)*t2 + (-8*a3 + 6*a1)*t3 + (-6*a4 + 3*a2)*t4 + a3*t5 >= 0) {
+             // And that it corresponds to an angle different than the known minimum.
+-            double t = 2*atan(roots[i]);
++            double t_cur = 2*atan(roots[i]);
+             // We only care about finding a second local minima which is qualitatively
+             // different than the first.
+-            if (fabs(t - t_initial) > 0.1) {
++            if (fabs(t_cur - t_initial) > 0.1) {
+                 minima[n_minima++] = roots[i];
+             }
+         }
+@@ -421,18 +421,18 @@ matd_t* fix_pose_ambiguities(matd_t** v, matd_t** p, matd_t* t, matd_t* R, int n
+     // 5. Get poses for minima.
+     matd_t* ret = NULL;
+     if (n_minima == 1) {
+-        double t = minima[0];
++        double t_cur = minima[0];
+         matd_t* R_beta = matd_copy(M2);
+-        matd_scale_inplace(R_beta, t);
++        matd_scale_inplace(R_beta, t_cur);
+         matd_add_inplace(R_beta, M1);
+-        matd_scale_inplace(R_beta, t);
++        matd_scale_inplace(R_beta, t_cur);
+         matd_add_inplace(R_beta, I3);
+-        matd_scale_inplace(R_beta, 1/(1 + t*t));
++        matd_scale_inplace(R_beta, 1/(1 + t_cur*t_cur));
+         ret = matd_op("M'MMM'", R_t, R_gamma, R_beta, R_z);
+         matd_destroy(R_beta);
+     } else if (n_minima > 1)  {
+         // This can happen if our prior pose estimate was not very good.
+-        fprintf(stderr, "Error, more than one new minima found.\n");
++        fprintf(stderr, "Error, more than one new minimum found.\n");
+     }
+     matd_destroy(I3);
+     matd_destroy(M1);
+diff --git a/apriltag_py_type.docstring b/apriltag_py_type.docstring
+new file mode 100644
+index 0000000..97612e3
+--- /dev/null
++++ b/apriltag_py_type.docstring
+@@ -0,0 +1,80 @@
++AprilTag detector
++
++SYNOPSIS
++
++    import cv2
++    import numpy as np
++    from apriltag import apriltag
++
++    imagepath = '/tmp/tst.jpg'
++    image     = cv2.imread(imagepath, cv2.IMREAD_GRAYSCALE)
++    detector = apriltag("tag36h11")
++
++    detections = detector.detect(image)
++
++    print("Saw tags {} at\n{}". \
++          format([d['id']     for d in detections],
++                 np.array([d['center'] for d in detections])))
++
++    ----> Saw tags [3, 5, 7, 8, 10, 10, 14] at
++          [[582.42911184 172.90587335]
++           [703.32149701 271.50587376]
++           [288.1462089  227.01502779]
++           [463.63679264 227.91185418]
++           [ 93.88534443 241.61109765]
++           [121.94062798 237.97010936]
++           [356.46940849 260.20169159]]
++
++DESCRIPTION
++
++The AprilTags visual fiducial system project page is here:
++https://april.eecs.umich.edu/software/apriltag
++
++This is a Python class to provide AprilTags functionality in Python programs. To
++run the detector you
++
++1. Construct an object of type apriltag.apriltag()
++
++2. Invoke the detect() method on this object
++
++The constructor takes a number of arguments:
++
++- family: a string for the tag type we're detecting. This argument is required.
++  If an invalid string is given, the known list of tag families will be
++  reported. At the time of this writing the known families are:
++
++  - "tag36h11"
++  - "tag25h9"
++  - "tag16h5"
++  - "tagCircle21h7"
++  - "tagCircle49h12"
++  - "tagStandard41h12"
++  - "tagStandard52h13"
++  - "tagCustom48h12"
++
++All the other arguments are optional:
++
++- Nthreads: how many threads the detector should use. Default is 1
++
++- maxhamming: max number of corrected bits. Larger values guzzle RAM. Default is
++  1
++
++- decimate: detection of quads can be done on a lower-resolution image,
++  improving speed at a cost of pose accuracy and a slight decrease in detection
++  rate. Decoding the binary payload is still done at full resolution. Default is 1.0
++
++- blur: What Gaussian blur should be applied to the segmented image (used for
++  quad detection?) Parameter is the standard deviation in pixels. Very noisy
++  images benefit from non-zero values (e.g. 0.8). Default is 0.0
++
++- refine_edges: When non-zero, the edges of the each quad are adjusted to "snap
++  to" strong gradients nearby. This is useful when decimation is employed, as it
++  can increase the quality of the initial quad estimate substantially. Generally
++  recommended to be on. Very computationally inexpensive. Option is ignored if
++  decimate == 1. Default is True
++
++- debug: When non-zero, write a variety of debugging images to the current
++  working directory at various stages through the detection process. (Somewhat
++  slow). Default is False
++
++The detect() method takes a single argument: an image array
+diff --git a/apriltag_pywrap.c b/apriltag_pywrap.c
+new file mode 100644
+index 0000000..5c754bb
+--- /dev/null
++++ b/apriltag_pywrap.c
+@@ -0,0 +1,365 @@
++#define NPY_NO_DEPRECATED_API NPY_API_VERSION
++
++#include <stdbool.h>
++#include <Python.h>
++#include <structmember.h>
++#include <numpy/arrayobject.h>
++#include <signal.h>
++
++#include "apriltag.h"
++#include "tag36h11.h"
++#include "tag25h9.h"
++#include "tag16h5.h"
++#include "tagCircle21h7.h"
++#include "tagCircle49h12.h"
++#include "tagCustom48h12.h"
++#include "tagStandard41h12.h"
++#include "tagStandard52h13.h"
++
++
++#define SUPPORTED_TAG_FAMILIES(_)           \
++    _(tag36h11)                             \
++    _(tag25h9)                              \
++    _(tag16h5)                              \
++    _(tagCircle21h7)                        \
++    _(tagCircle49h12)                       \
++    _(tagStandard41h12)                     \
++    _(tagStandard52h13)                     \
++    _(tagCustom48h12)
++
++#define TAG_CREATE_FAMILY(name) \
++    else if (0 == strcmp(family, #name)) self->tf = name ## _create();
++#define TAG_SET_DESTROY_FUNC(name) \
++    else if (0 == strcmp(family, #name)) self->destroy_func = name ## _destroy;
++#define FAMILY_STRING(name) "  " #name "\n"
++
++
++// Python is silly. There's some nuance about signal handling where it sets a
++// SIGINT (ctrl-c) handler to just set a flag, and the python layer then reads
++// this flag and does the thing. Here I'm running C code, so SIGINT would set a
++// flag, but not quit, so I can't interrupt the solver. Thus I reset the SIGINT
++// handler to the default, and put it back to the python-specific version when
++// I'm done
++#define SET_SIGINT() struct sigaction sigaction_old;                    \
++do {                                                                    \
++    if( 0 != sigaction(SIGINT,                                          \
++                       &(struct sigaction){ .sa_handler = SIG_DFL },    \
++                       &sigaction_old) )                                \
++    {                                                                   \
++        PyErr_SetString(PyExc_RuntimeError, "sigaction() failed");      \
++        goto done;                                                      \
++    }                                                                   \
++} while(0)
++#define RESET_SIGINT() do {                                             \
++    if( 0 != sigaction(SIGINT,                                          \
++                       &sigaction_old, NULL ))                          \
++        PyErr_SetString(PyExc_RuntimeError, "sigaction-restore failed"); \
++} while(0)
++
++#define PYMETHODDEF_ENTRY(function_prefix, name, args) {#name,          \
++                                                        (PyCFunction)function_prefix ## name, \
++                                                        args,           \
++                                                        function_prefix ## name ## _docstring}
++
++typedef struct {
++    PyObject_HEAD
++
++    apriltag_family_t*   tf;
++    apriltag_detector_t* td;
++    void (*destroy_func)(apriltag_family_t *tf);
++} apriltag_py_t;
++
++
++static PyObject *
++apriltag_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
++{
++    bool success = false;
++
++    apriltag_py_t* self = (apriltag_py_t*)type->tp_alloc(type, 0);
++    if(self == NULL) goto done;
++
++    self->tf = NULL;
++    self->td = NULL;
++
++    const char* family          = NULL;
++    int         Nthreads        = 1;
++    int         maxhamming      = 1;
++    float       decimate        = 1.0;
++    float       blur            = 0.0;
++    bool        refine_edges    = true;
++    bool        debug           = false;
++    PyObject*   py_refine_edges = NULL;
++    PyObject*   py_debug        = NULL;
++
++    char* keywords[] = {"family",
++                        "threads",
++                        "maxhamming",
++                        "decimate",
++                        "blur",
++                        "refine-edges",
++                        "debug",
++                        NULL };
++
++    if(!PyArg_ParseTupleAndKeywords( args, kwargs, "s|iiffOO",
++                                     keywords,
++                                     &family,
++                                     &Nthreads,
++                                     &maxhamming,
++                                     &decimate,
++                                     &blur,
++                                     &py_refine_edges,
++                                     &py_debug ))
++    {
++        goto done;
++    }
++
++    if(py_refine_edges != NULL)
++        refine_edges = PyObject_IsTrue(py_refine_edges);
++    if(py_debug        != NULL)
++        debug        = PyObject_IsTrue(py_debug);
++
++
++    if(0) ; SUPPORTED_TAG_FAMILIES(TAG_SET_DESTROY_FUNC)
++    else
++    {
++        PyErr_Format(PyExc_RuntimeError, "Unrecognized tag family name: '%s'. Families I know about:\n%s",
++                     family, SUPPORTED_TAG_FAMILIES(FAMILY_STRING));
++        goto done;
++    }
++
++    if(0) ; SUPPORTED_TAG_FAMILIES(TAG_CREATE_FAMILY);
++
++    self->td = apriltag_detector_create();
++    if(self->td == NULL)
++    {
++        PyErr_SetString(PyExc_RuntimeError, "apriltag_detector_create() failed!");
++        goto done;
++    }
++
++    apriltag_detector_add_family_bits(self->td, self->tf, maxhamming);
++    self->td->quad_decimate       = decimate;
++    self->td->quad_sigma          = blur;
++    self->td->nthreads            = Nthreads;
++    self->td->refine_edges        = refine_edges;
++    self->td->debug               = debug;
++
++    success = true;
++
++ done:
++    if(!success)
++    {
++        if(self != NULL)
++        {
++            if(self->td != NULL)
++            {
++                apriltag_detector_destroy(self->td);
++                self->td = NULL;
++            }
++            if(self->tf != NULL)
++            {
++                self->destroy_func(self->tf);
++                self->tf = NULL;
++            }
++            Py_DECREF(self);
++        }
++        return NULL;
++    }
++
++    return (PyObject*)self;
++}
++
++static void apriltag_dealloc(apriltag_py_t* self)
++{
++    if(self == NULL)
++        return;
++    if(self->td != NULL)
++    {
++        apriltag_detector_destroy(self->td);
++        self->td = NULL;
++    }
++    if(self->tf != NULL)
++    {
++        self->destroy_func(self->tf);
++        self->tf = NULL;
++    }
++
++    Py_TYPE(self)->tp_free((PyObject*)self);
++}
++
++static PyObject* apriltag_detect(apriltag_py_t* self,
++                                 PyObject* args)
++{
++    PyObject*      result           = NULL;
++    PyArrayObject* xy_c             = NULL;
++    PyArrayObject* xy_lb_rb_rt_lt   = NULL;
++    PyArrayObject* image            = NULL;
++    PyObject*      detections_tuple = NULL;
++
++    SET_SIGINT();
++    if(!PyArg_ParseTuple( args, "O&",
++                          PyArray_Converter, &image ))
++        goto done;
++
++    npy_intp* dims    = PyArray_DIMS   (image);
++    npy_intp* strides = PyArray_STRIDES(image);
++    int       ndims   = PyArray_NDIM   (image);
++    if( ndims != 2 )
++    {
++        PyErr_Format(PyExc_RuntimeError, "The input image array must have exactly 2 dims; got %d",
++                     ndims);
++        goto done;
++    }
++    if( PyArray_TYPE(image) != NPY_UINT8 )
++    {
++        PyErr_SetString(PyExc_RuntimeError, "The input image array must contain 8-bit unsigned data");
++        goto done;
++    }
++    if( strides[ndims-1] != 1 )
++    {
++        PyErr_SetString(PyExc_RuntimeError, "Image rows must live in contiguous memory");
++        goto done;
++    }
++
++
++    image_u8_t im = {.width  = dims[1],
++                     .height = dims[0],
++                     .stride = strides[0],
++                     .buf    = PyArray_DATA(image)};
++
++    zarray_t* detections = apriltag_detector_detect(self->td, &im);
++    int N = zarray_size(detections);
++
++    detections_tuple = PyTuple_New(N);
++    if(detections_tuple == NULL)
++    {
++        PyErr_Format(PyExc_RuntimeError, "Error creating output tuple of size %d", N);
++        goto done;
++    }
++
++    for (int i=0; i < N; i++)
++    {
++        xy_c = (PyArrayObject*)PyArray_SimpleNew(1, ((npy_intp[]){2}), NPY_FLOAT64);
++        if(xy_c == NULL)
++        {
++            PyErr_SetString(PyExc_RuntimeError, "Could not allocate xy_c array");
++            goto done;
++        }
++        xy_lb_rb_rt_lt = (PyArrayObject*)PyArray_SimpleNew(2, ((npy_intp[]){4,2}), NPY_FLOAT64);
++        if(xy_lb_rb_rt_lt == NULL)
++        {
++            PyErr_SetString(PyExc_RuntimeError, "Could not allocate xy_lb_rb_rt_lt array");
++            goto done;
++        }
++
++        apriltag_detection_t* det;
++        zarray_get(detections, i, &det);
++
++        *(double*)PyArray_GETPTR1(xy_c, 0) = det->c[0];
++        *(double*)PyArray_GETPTR1(xy_c, 1) = det->c[1];
++
++        for(int j=0; j<4; j++)
++        {
++            *(double*)PyArray_GETPTR2(xy_lb_rb_rt_lt, j, 0) = det->p[j][0];
++            *(double*)PyArray_GETPTR2(xy_lb_rb_rt_lt, j, 1) = det->p[j][1];
++        }
++
++        PyTuple_SET_ITEM(detections_tuple, i,
++                         Py_BuildValue("{s:i,s:f,s:i,s:O,s:O}",
++                                       "hamming", det->hamming,
++                                       "margin",  det->decision_margin,
++                                       "id",      det->id,
++                                       "center",  xy_c,
++                                       "lb-rb-rt-lt", xy_lb_rb_rt_lt));
++        xy_c           = NULL;
++        xy_lb_rb_rt_lt = NULL;
++    }
++    apriltag_detections_destroy(detections);
++
++    result = detections_tuple;
++    detections_tuple = NULL;
++
++ done:
++    Py_XDECREF(xy_c);
++    Py_XDECREF(xy_lb_rb_rt_lt);
++    Py_XDECREF(image);
++    Py_XDECREF(detections_tuple);
++
++    RESET_SIGINT();
++    return result;
++}
++
++
++static const char apriltag_detect_docstring[] =
++#include "apriltag_detect.docstring.h"
++    ;
++static const char apriltag_type_docstring[] =
++#include "apriltag_py_type.docstring.h"
++    ;
++
++static PyMethodDef apriltag_methods[] =
++    { PYMETHODDEF_ENTRY(apriltag_, detect, METH_VARARGS),
++      {}
++    };
++
++static PyTypeObject apriltagType =
++{
++     PyVarObject_HEAD_INIT(NULL, 0)
++    .tp_name      = "apriltag",
++    .tp_basicsize = sizeof(apriltag_py_t),
++    .tp_new       = apriltag_new,
++    .tp_dealloc   = (destructor)apriltag_dealloc,
++    .tp_methods   = apriltag_methods,
++    .tp_flags     = Py_TPFLAGS_DEFAULT,
++    .tp_doc       = apriltag_type_docstring
++};
++
++static PyMethodDef methods[] =
++    { {}
++    };
++
++
++#if PY_MAJOR_VERSION == 2
++
++PyMODINIT_FUNC initapriltag(void)
++{
++    if (PyType_Ready(&apriltagType) < 0)
++        return;
++
++    PyObject* module = Py_InitModule3("apriltag", methods,
++                                      "AprilTags visual fiducial system detector");
++
++    Py_INCREF(&apriltagType);
++    PyModule_AddObject(module, "apriltag", (PyObject *)&apriltagType);
++
++    import_array();
++}
++
++#else
++
++static struct PyModuleDef module_def =
++    {
++     PyModuleDef_HEAD_INIT,
++     "apriltag",
++     "AprilTags visual fiducial system detector",
++     -1,
++     methods
++    };
++
++PyMODINIT_FUNC PyInit_apriltag(void)
++{
++    if (PyType_Ready(&apriltagType) < 0)
++        return NULL;
++
++    PyObject* module =
++        PyModule_Create(&module_def);
++
++    Py_INCREF(&apriltagType);
++    PyModule_AddObject(module, "apriltag", (PyObject *)&apriltagType);
++
++    import_array();
++
++    return module;
++}
++
++#endif
++
+diff --git a/apriltag_quad_thresh.c b/apriltag_quad_thresh.c
+index dc36513..7d7ecb7 100644
+--- a/apriltag_quad_thresh.c
++++ b/apriltag_quad_thresh.c
+@@ -377,8 +377,11 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
+     free(errs);
+ 
+     // if we didn't get at least 4 maxima, we can't fit a quad.
+-    if (nmaxima < 4)
++    if (nmaxima < 4){
++        free(maxima);
++        free(maxima_errs);
+         return 0;
++    }
+ 
+     // select only the best maxima if we have too many
+     int max_nmaxima = td->qtp.max_nmaxima;
+@@ -1714,10 +1717,10 @@ zarray_t* gradient_clusters(apriltag_detector_t *td, image_u8_t* threshim, int w
+     clusters = zarray_create(sizeof(zarray_t*));
+     zarray_ensure_capacity(clusters, zarray_size(clusters_list[0]));
+     for (int i = 0; i < zarray_size(clusters_list[0]); i++) {
+-        struct cluster_hash* h;
+-        zarray_get(clusters_list[0], i, &h);
+-        zarray_add(clusters, &h->data);
+-        free(h);
++        struct cluster_hash* hash;
++        zarray_get(clusters_list[0], i, &hash);
++        zarray_add(clusters, &hash->data);
++        free(hash);
+     }
+     zarray_destroy(clusters_list[0]);
+     free(clusters_list);
+@@ -1901,8 +1904,8 @@ zarray_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im)
+             float rgb[3];
+             int bias = 100;
+ 
+-            for (int i = 0; i < 3; i++)
+-                rgb[i] = bias + (random() % (255-bias));
++            for (int j = 0; j < 3; j++)
++                rgb[j] = bias + (random() % (255-bias));
+ 
+             fprintf(f, "%f %f %f setrgbcolor\n", rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f);
+             fprintf(f, "%.15f %.15f moveto %.15f %.15f lineto %.15f %.15f lineto %.15f %.15f lineto %.15f %.15f lineto stroke\n",
+diff --git a/common/matd.c b/common/matd.c
+index 48f081c..df416dc 100644
+--- a/common/matd.c
++++ b/common/matd.c
+@@ -1044,8 +1044,10 @@ static matd_svd_t matd_svd_tall(matd_t *A, int flags)
+             double mag = sqrt(mag2);
+ 
+             // this case arises with matrices of all zeros, for example.
+-            if (mag == 0)
++            if (mag == 0) {
++                free(v);
+                 continue;
++            }
+ 
+             for (int i = 0; i < vlen; i++)
+                 v[i] /= mag;
+diff --git a/common/pjpeg.c b/common/pjpeg.c
+index f247e79..b87c6af 100644
+--- a/common/pjpeg.c
++++ b/common/pjpeg.c
+@@ -549,16 +549,16 @@ static int pjpeg_decode_buffer(struct pjpeg_decode_state *pjd)
+                                 printf("RST SYNC\n");
+                             }
+ 
+-                            int32_t marker = bd_consume_bits(&bd, 8);
++                            int32_t marker_32 = bd_consume_bits(&bd, 8);
+ 
+-//                            printf("%04x: RESET? %02x\n", *bd.inpos,  marker);
+-                            if (marker != (0xd0 + pjd->reset_next))
++//                            printf("%04x: RESET? %02x\n", *bd.inpos,  marker_32);
++                            if (marker_32 != (0xd0 + pjd->reset_next))
+                                 return PJPEG_ERR_RESET;
+ 
+                             pjd->reset_count = 0;
+                             pjd->reset_next = (pjd->reset_next + 1) & 0x7;
+ 
+-                            memset(dcpred, 0, sizeof(dcpred));
++                            memset(dcpred, 0, sizeof(*dcpred));
+                         }
+ 
+                         for (int nsidx = 0; nsidx < ns; nsidx++) {
+diff --git a/common/string_util.c b/common/string_util.c
+index 4e7bef7..d2bf8bd 100644
+--- a/common/string_util.c
++++ b/common/string_util.c
+@@ -202,10 +202,10 @@ zarray_t *str_split_spaces(const char *str)
+ 	pos++;
+       size_t off1 = pos;
+ 
+-      size_t len = off1 - off0;
+-      char *tok = malloc(len + 1);
+-      memcpy(tok, &str[off0], len);
+-      tok[len] = 0;
++      size_t len_off = off1 - off0;
++      char *tok = malloc(len_off + 1);
++      memcpy(tok, &str[off0], len_off);
++      tok[len_off] = 0;
+       zarray_add(parts, &tok);
+     }
+   }
+diff --git a/common/zarray.h b/common/zarray.h
+index 4797874..1a882c2 100644
+--- a/common/zarray.h
++++ b/common/zarray.h
+@@ -226,26 +226,6 @@ inline static void zarray_truncate(zarray_t *za, int sz)
+    za->size = sz;
+ }
+ 
+-/**
+- * Copies the memory array used internally by zarray to store its owned
+- * elements to the address pointed by 'buffer'. It is the caller's responsibility
+- * to allocate zarray_size()*el_sz bytes for the copy to be stored and
+- * to free the memory when no longer needed. The memory allocated at 'buffer'
+- * and the internal zarray storage must not overlap. 'buffer_bytes' should be
+- * the size of the 'buffer' memory space, in bytes, and must be at least
+- * zarray_size()*el_sz.
+- *
+- * Returns the number of bytes copied into 'buffer'.
+- */
+-static inline size_t zarray_copy_data(const zarray_t *za, void *buffer, size_t buffer_bytes)
+-{
+-    assert(za != NULL);
+-    assert(buffer != NULL);
+-    assert(buffer_bytes >= za->el_sz * za->size);
+-    memcpy(buffer, za->data, za->el_sz * za->size);
+-    return za->el_sz * za->size;
+-}
+-
+ /**
+  * Removes the entry at index 'idx'.
+  * If shuffle is true, the last element in the array will be placed in
+diff --git a/common/zhash.c b/common/zhash.c
+index 4db91f3..6c3a6d9 100644
+--- a/common/zhash.c
++++ b/common/zhash.c
+@@ -179,11 +179,11 @@ int zhash_put(zhash_t *zh, const void *key, const void *value, void *oldkey, voi
+                                                  zh->hash, zh->equals,
+                                                  zh->size);
+ 
+-        for (int entry_idx = 0; entry_idx < zh->nentries; entry_idx++) {
++        for (int idx = 0; idx < zh->nentries; idx++) {
+ 
+-            if (zh->entries[entry_idx * zh->entrysz]) {
+-                void *this_key = &zh->entries[entry_idx * zh->entrysz + 1];
+-                void *this_value = &zh->entries[entry_idx * zh->entrysz + 1 + zh->keysz];
++            if (zh->entries[idx * zh->entrysz]) {
++                void *this_key = &zh->entries[idx * zh->entrysz + 1];
++                void *this_value = &zh->entries[idx * zh->entrysz + 1 + zh->keysz];
+                 if (zhash_put(newhash, this_key, this_value, NULL, NULL))
+                     assert(0); // shouldn't already be present.
+             }
+diff --git a/package.xml b/package.xml
+index c25c459..31e4023 100644
+--- a/package.xml
++++ b/package.xml
+@@ -2,7 +2,7 @@
+ <?xml-model href="http://download.ros.org/schema/package_format2.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+ <package format="2">
+   <name>apriltag</name>
+-  <version>3.1.1</version>
++  <version>3.1.2</version>
+   <description>AprilTag detector library</description>
+ 
+   <maintainer email="mkrogius@umich.edu">Max Krogius</maintainer>
+diff --git a/python_build_flags.py b/python_build_flags.py
+new file mode 100644
+index 0000000..f3f0e79
+--- /dev/null
++++ b/python_build_flags.py
+@@ -0,0 +1,34 @@
++from __future__ import print_function
++import sysconfig
++import re
++import numpy as np
++conf = sysconfig.get_config_vars()
++
++print('CFLAGS', end=';')
++c_flags = []
++# Grab compiler flags minus the compiler itself.
++c_flags.extend(conf.get('CC', '').split()[2:])
++c_flags.extend(conf.get('CFLAGS', '').split())
++c_flags.extend(conf.get('CCSHARED', '').split())
++c_flags.append('-I{}'.format(conf.get('INCLUDEPY', '')))
++c_flags.append('-I{}'.format(np.get_include()))
++c_flags.append('-Wno-strict-prototypes')
++c_flags = [x for x in c_flags if not x.startswith('-O')]
++print(' '.join(c_flags), end=';')
++
++
++print('LINKER', end=';')
++print(conf.get('BLDSHARED', '').split()[0], end=';')
++
++print('LDFLAGS', end=';')
++print(' '.join(conf.get('BLDSHARED', '').split()[1:]) + ' ' + conf.get('BLDLIBRARY', '') + ' ' + conf.get('LDFLAGS', ''), end=';')
++
++print('EXT_SUFFIX', end=';')
++ext_suffix = '.so'
++if 'EXT_SUFFIX' in conf:
++    ext_suffix = conf['EXT_SUFFIX']
++elif 'MULTIARCH' in conf:
++    ext_suffix = '.' + conf['MULTIARCH'] + '.so'
++
++print(ext_suffix, end=';')
++
+diff --git a/tag16h5.c b/tag16h5.c
+index e871c60..ac8376e 100644
+--- a/tag16h5.c
++++ b/tag16h5.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tag16h5.h"
+ 
+ apriltag_family_t *tag16h5_create()
+ {
+diff --git a/tag16h5.h b/tag16h5.h
+index 370f0b2..d868c81 100644
+--- a/tag16h5.h
++++ b/tag16h5.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAG16H5
+ #define _TAG16H5
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+diff --git a/tag25h9.c b/tag25h9.c
+index 9cd74f1..0181265 100644
+--- a/tag25h9.c
++++ b/tag25h9.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tag25h9.h"
+ 
+ apriltag_family_t *tag25h9_create()
+ {
+diff --git a/tag25h9.h b/tag25h9.h
+index 8f4f0f7..9197c8b 100644
+--- a/tag25h9.h
++++ b/tag25h9.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAG25H9
+ #define _TAG25H9
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+diff --git a/tag36h11.c b/tag36h11.c
+index 7239ee6..b90e0fb 100644
+--- a/tag36h11.c
++++ b/tag36h11.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tag36h11.h"
+ 
+ apriltag_family_t *tag36h11_create()
+ {
+diff --git a/tag36h11.h b/tag36h11.h
+index 07d3a49..6203878 100644
+--- a/tag36h11.h
++++ b/tag36h11.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAG36H11
+ #define _TAG36H11
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+diff --git a/tagCircle21h7.c b/tagCircle21h7.c
+index c8d83f3..dffc171 100644
+--- a/tagCircle21h7.c
++++ b/tagCircle21h7.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tagCircle21h7.h"
+ 
+ apriltag_family_t *tagCircle21h7_create()
+ {
+diff --git a/tagCircle21h7.h b/tagCircle21h7.h
+index 9182d87..a051db6 100644
+--- a/tagCircle21h7.h
++++ b/tagCircle21h7.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAGCircle21H7
+ #define _TAGCircle21H7
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+diff --git a/tagCircle49h12.c b/tagCircle49h12.c
+index 8d252ce..3eade92 100644
+--- a/tagCircle49h12.c
++++ b/tagCircle49h12.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tagCircle49h12.h"
+ 
+ apriltag_family_t *tagCircle49h12_create()
+ {
+diff --git a/tagCircle49h12.h b/tagCircle49h12.h
+index 98c4f27..4b4c084 100644
+--- a/tagCircle49h12.h
++++ b/tagCircle49h12.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAGCircle49H12
+ #define _TAGCircle49H12
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+diff --git a/tagCustom48h12.c b/tagCustom48h12.c
+index 52251f8..f088732 100644
+--- a/tagCustom48h12.c
++++ b/tagCustom48h12.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tagCustom48h12.h"
+ 
+ apriltag_family_t *tagCustom48h12_create()
+ {
+diff --git a/tagCustom48h12.h b/tagCustom48h12.h
+index 9759990..564a98a 100644
+--- a/tagCustom48h12.h
++++ b/tagCustom48h12.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAGCustom48H12
+ #define _TAGCustom48H12
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+diff --git a/tagStandard41h12.c b/tagStandard41h12.c
+index 0c821d6..2bc4626 100644
+--- a/tagStandard41h12.c
++++ b/tagStandard41h12.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tagStandard41h12.h"
+ 
+ apriltag_family_t *tagStandard41h12_create()
+ {
+diff --git a/tagStandard41h12.h b/tagStandard41h12.h
+index 5684838..7f2c33b 100644
+--- a/tagStandard41h12.h
++++ b/tagStandard41h12.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAGStandard41H12
+ #define _TAGStandard41H12
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+diff --git a/tagStandard52h13.c b/tagStandard52h13.c
+index f8fab87..9e507fa 100644
+--- a/tagStandard52h13.c
++++ b/tagStandard52h13.c
+@@ -26,7 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
+ */
+ 
+ #include <stdlib.h>
+-#include "apriltag.h"
++#include "tagStandard52h13.h"
+ 
+ apriltag_family_t *tagStandard52h13_create()
+ {
+diff --git a/tagStandard52h13.h b/tagStandard52h13.h
+index abc93a8..aeeb8e3 100644
+--- a/tagStandard52h13.h
++++ b/tagStandard52h13.h
+@@ -28,6 +28,8 @@ either expressed or implied, of the Regents of The University of Michigan.
+ #ifndef _TAGStandard52H13
+ #define _TAGStandard52H13
+ 
++#include "apriltag.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+-- 
+2.25.1
+

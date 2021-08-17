@@ -1,0 +1,24 @@
+From b5d0b79ecfd6bcfd0831749ebb48cef9e43f9373 Mon Sep 17 00:00:00 2001
+From: Wolfgang Merkt <w.merkt@gmail.com>
+Date: Fri, 18 Sep 2020 12:30:26 +0100
+Subject: [PATCH 3/3] Rebase from 'upstream'
+
+---
+ CMakeLists.txt | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8eafbfa..c733c6c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -8,7 +8,6 @@ aux_source_directory(common COMMON_SRC)
+ set(APRILTAG_SRCS apriltag.c apriltag_pose.c apriltag_quad_thresh.c)
+ 
+ set(CMAKE_BUILD_TYPE Release)
+-set(CMAKE_INSTALL_LIBDIR "lib") # lib prefix workaround for multi-arch
+ 
+ # Library
+ file(GLOB TAG_FILES ${CMAKE_SOURCE_DIR}/tag*.c)
+-- 
+2.25.1
+
