@@ -1,1 +1,1 @@
-{"trim": "", "base": "bcc1870", "trimbase": "", "parent": "debian/noetic/apriltag", "previous": "b90e526"}
+{"base": "bae04eb", "parent": "debian/noetic/apriltag", "previous": "05228f9", "trim": "", "trimbase": ""}
