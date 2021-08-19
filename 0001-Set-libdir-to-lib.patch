@@ -1,0 +1,25 @@
+From 3ea3ce60afecc0255084572b35a6fbc2917b502a Mon Sep 17 00:00:00 2001
+From: Wolfgang Merkt <w.merkt@gmail.com>
+Date: Fri, 18 Sep 2020 11:54:10 +0100
+Subject: [PATCH] Set libdir to lib
+
+---
+ CMakeLists.txt | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8451bf4..edde563 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -13,6 +13,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS  "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+ endif()
+ 
++set(CMAKE_INSTALL_LIBDIR "lib") # lib prefix workaround for multi-arch
++
+ find_package(OpenCV QUIET)
+ 
+ aux_source_directory(common COMMON_SRC)
+-- 
+2.25.1
+
