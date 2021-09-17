@@ -1,24 +1,25 @@
-From 9ea2e27233d4271d77c37f22af749b7c06b1b3de Mon Sep 17 00:00:00 2001
+From 9750b5f0ceaf9ca737515bfa792b688c3510793e Mon Sep 17 00:00:00 2001
 From: Wolfgang Merkt <w.merkt@gmail.com>
 Date: Mon, 15 Jun 2020 16:49:42 +0100
 Subject: [PATCH] Set CMAKE_INSTALL_LIBDIR to lib
 
 ---
- CMakeLists.txt | 1 +
- 1 file changed, 1 insertion(+)
+ CMakeLists.txt | 2 ++
+ 1 file changed, 2 insertions(+)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index c733c6c..8eafbfa 100644
+index 8451bf4..edde563 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -8,6 +8,7 @@ aux_source_directory(common COMMON_SRC)
- set(APRILTAG_SRCS apriltag.c apriltag_pose.c apriltag_quad_thresh.c)
+@@ -13,6 +13,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS  "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+ endif()
  
- set(CMAKE_BUILD_TYPE Release)
 +set(CMAKE_INSTALL_LIBDIR "lib") # lib prefix workaround for multi-arch
++
+ find_package(OpenCV QUIET)
  
- # Library
- file(GLOB TAG_FILES ${CMAKE_SOURCE_DIR}/tag*.c)
+ aux_source_directory(common COMMON_SRC)
 -- 
 2.25.1
 
