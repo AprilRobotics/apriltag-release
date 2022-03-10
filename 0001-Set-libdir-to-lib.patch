@@ -1,4 +1,4 @@
-From 3ea3ce60afecc0255084572b35a6fbc2917b502a Mon Sep 17 00:00:00 2001
+From a18bc6f49cbe3902632e3fc0aa156bc6ea99f3c8 Mon Sep 17 00:00:00 2001
 From: Wolfgang Merkt <w.merkt@gmail.com>
 Date: Fri, 18 Sep 2020 11:54:10 +0100
 Subject: [PATCH] Set libdir to lib
