@@ -1,4 +1,4 @@
-From 9750b5f0ceaf9ca737515bfa792b688c3510793e Mon Sep 17 00:00:00 2001
+From 59cd2795062d8f2d5ab47f5f2643faff674dd460 Mon Sep 17 00:00:00 2001
 From: Wolfgang Merkt <w.merkt@gmail.com>
 Date: Mon, 15 Jun 2020 16:49:42 +0100
 Subject: [PATCH] Set CMAKE_INSTALL_LIBDIR to lib
